@@ -23,6 +23,7 @@ NIXL_PLUGINS_DIR="/usr/local/nixl/lib/$ARCH-linux-gnu/plugins"
 OUTPUT_DIR="dist"
 BUILD_NIXL_EP="false"
 TORCH_VERSIONS=""
+TORCH_CUDA_INDEX=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -60,6 +61,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --nixl-plugins-dir: Directory to find NIXL plugins in (default: $NIXL_PLUGINS_DIR)"
             echo "  --build-nixl-ep: Build wheel with nixl_ep package included (requires a CUDA sm_90 or newer target environment)"
             echo "  --torch-versions: Comma-separated list of torch versions to build the wheel for (default: $TORCH_VERSIONS)"
+            echo "  --torch-cuda-index: torch wheel index, e.g. cu132 (default: cu<major><minor> of the nvcc toolkit)"
             echo "  --help: Show this help message"
             echo ""
             echo "Must be executed from the root of the NIXL repository."
@@ -71,6 +73,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --torch-versions)
             TORCH_VERSIONS=$2
+            shift
+            shift
+            ;;
+        --torch-cuda-index)
+            TORCH_CUDA_INDEX=$2
             shift
             shift
             ;;
@@ -100,7 +107,16 @@ fi
 AUDITWHEEL_EXCLUDES="--exclude libcuda* --exclude libcufile* --exclude libcuobjclient* --exclude libssl* --exclude libcrypto* --exclude libefa* --exclude libhwloc* --exclude libfabric* --exclude libtorch* --exclude libc10* --exclude libdoca* --exclude libred_client* --exclude libred_async* --exclude liblz4*"
 
 PKG_NAME="nixl-cu${CUDA_MAJOR}"
-CU_TAG="cu$(nvcc --version | grep -Eo 'release [0-9]+\.[0-9]+' | cut -d' ' -f2 | tr -d .)"
+# torch index: --torch-cuda-index, else cu<major><minor> of the toolkit; the
+# CUDA major must match (PyTorch has no stable wheels for every CUDA minor).
+CU_TAG="${TORCH_CUDA_INDEX:-cu$(nvcc --version | grep -Eo 'release [0-9]+\.[0-9]+' | cut -d' ' -f2 | tr -d .)}"
+case "$CU_TAG" in
+    cu${CUDA_MAJOR}[0-9]*) ;;
+    *)
+        echo "ERROR: torch index '$CU_TAG' does not match the CUDA ${CUDA_MAJOR} toolkit" >&2
+        exit 1
+        ;;
+esac
 ./contrib/tomlutil.py --wheel-name $PKG_NAME pyproject.toml
 
 TORCH_STABLE_INDEX="https://download.pytorch.org/whl/${CU_TAG}"
