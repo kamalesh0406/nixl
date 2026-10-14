@@ -137,7 +137,7 @@ nixlUcxEp::disconnect() {
 
 nixlUcxEp::nixlUcxEp(ucp_worker_h worker, void *addr, ucp_err_handling_mode_t err_handling_mode)
     : closeFlags_(err_handling_mode == UCP_ERR_HANDLING_MODE_PEER ? UCP_EP_CLOSE_FLAG_FORCE : 0) {
-    ucp_ep_params_t ep_params;
+    ucp_ep_params_t ep_params{};
 
     ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS | UCP_EP_PARAM_FIELD_ERR_HANDLER |
         UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE;
