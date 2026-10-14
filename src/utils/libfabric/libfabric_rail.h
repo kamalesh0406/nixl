@@ -20,6 +20,7 @@
 
 #include <vector>
 #include <deque>
+#include <list>
 #include <limits>
 #include <string>
 #include <functional>
@@ -488,6 +489,9 @@ public:
     nixl_status_t
     postSend(uint64_t immediate_data, fi_addr_t dest_addr, nixlLibfabricReq *req);
 
+    nixl_status_t
+    queueHandshakeSend(uint64_t immediate_data, fi_addr_t dest_addr, nixlLibfabricReq *req);
+
     /** Post RDMA write operation with immediate data */
     nixl_status_t
     postWrite(const void *local_buffer,
@@ -615,6 +619,22 @@ private:
     //  - Keep it innermost: never run completion handling or callbacks while holding it,
     //    they take other locks and may re-enter (e.g. postRecv from a recv completion).
     mutable std::mutex ep_mutex_;
+
+    struct PendingHandshakeSend {
+        uint64_t immediate_data;
+        fi_addr_t dest_addr;
+        nixlLibfabricReq *req;
+    };
+
+    std::mutex pending_handshake_sends_mutex_;
+    std::list<PendingHandshakeSend> pending_handshake_sends_;
+    size_t pending_handshake_send_count_ = 0;
+
+    void
+    progressPendingHandshakeSends();
+
+    void
+    discardUnpostedHandshakeSends();
 
     // Lock-free MPSC ring: main thread pushes, PT pops and posts
     using post_ring_t = MpscRing<nixlLibfabricPostRequest>;

@@ -26,6 +26,8 @@
 #endif
 
 #include <cstring>
+#include <algorithm>
+#include <new>
 #include <stdexcept>
 #include <stack>
 
@@ -711,6 +713,8 @@ void
 nixlLibfabricRail::cleanup() {
     NIXL_TRACE << "Starting cleanup for rail " << rail_id;
 
+    discardUnpostedHandshakeSends();
+
     // STEP 1: Close endpoint first to stop any new operations
     if (endpoint) {
         NIXL_TRACE << "Closing endpoint for rail " << rail_id;
@@ -884,6 +888,7 @@ nixlLibfabricRail::progressCompletionQueue() {
 
     // PT-owns-endpoint: drain pending posts AFTER processing completions
     if (progress_thread_enabled_) {
+        progressPendingHandshakeSends();
         nixl_status_t status = drainPostQueue();
         if (status != NIXL_SUCCESS) {
             NIXL_ERROR << "Failed to drain post-qeueu";
@@ -1212,6 +1217,96 @@ nixlLibfabricRail::postRecv(nixlLibfabricReq *req) const {
 
     NIXL_TRACE << "Receive posted successfully";
     return NIXL_SUCCESS;
+}
+
+nixl_status_t
+nixlLibfabricRail::queueHandshakeSend(uint64_t immediate_data,
+                                      fi_addr_t dest_addr,
+                                      nixlLibfabricReq *req) {
+    if (!req || req->buffer_size == 0 || req->buffer_size > NIXL_LIBFABRIC_SEND_RECV_BUFFER_SIZE) {
+        return NIXL_ERR_INVALID_PARAM;
+    }
+
+    if (!progress_thread_enabled_) {
+        return postSend(immediate_data, dest_addr, req);
+    }
+
+    std::lock_guard<std::mutex> lock(pending_handshake_sends_mutex_);
+    if (pending_handshake_send_count_ >= NIXL_LIBFABRIC_RECV_POOL_SIZE) {
+        NIXL_ERROR << "Pending handshake send queue is full on rail " << rail_id;
+        return NIXL_ERR_BACKEND;
+    }
+    try {
+        pending_handshake_sends_.push_back({immediate_data, dest_addr, req});
+    }
+    catch (const std::bad_alloc &) {
+        return NIXL_ERR_BACKEND;
+    }
+    ++pending_handshake_send_count_;
+    return NIXL_SUCCESS;
+}
+
+void
+nixlLibfabricRail::progressPendingHandshakeSends() {
+    std::list<PendingHandshakeSend> pending;
+    {
+        std::lock_guard<std::mutex> lock(pending_handshake_sends_mutex_);
+        if (pending_handshake_sends_.empty()) {
+            return;
+        }
+        pending.splice(pending.end(), pending_handshake_sends_);
+    }
+
+    const size_t initial_count = pending.size();
+    const size_t attempt_count =
+        std::min(initial_count, static_cast<size_t>(NIXL_LIBFABRIC_CQ_BATCH_SIZE));
+    for (size_t attempt = 0; attempt < attempt_count; ++attempt) {
+        const auto send = pending.front();
+        int result;
+        {
+            std::lock_guard<std::mutex> lock(ep_mutex_);
+            result = fi_senddata(endpoint,
+                                 send.req->buffer,
+                                 send.req->buffer_size,
+                                 fi_mr_desc(send.req->mr),
+                                 send.immediate_data,
+                                 send.dest_addr,
+                                 &send.req->ctx);
+        }
+
+        if (result == -FI_EAGAIN) {
+            pending.splice(pending.end(), pending, pending.begin());
+        } else {
+            if (result != 0) {
+                NIXL_ERROR << "Deferred handshake send failed on rail " << rail_id << ": "
+                           << fi_strerror(-result);
+                if (send.req->completion_callback) {
+                    send.req->completion_callback(NIXL_ERR_BACKEND);
+                }
+                releaseRequest(send.req);
+            }
+            pending.pop_front();
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(pending_handshake_sends_mutex_);
+        pending_handshake_send_count_ -= initial_count - pending.size();
+        pending_handshake_sends_.splice(pending_handshake_sends_.begin(), pending);
+    }
+}
+
+void
+nixlLibfabricRail::discardUnpostedHandshakeSends() {
+    std::list<PendingHandshakeSend> pending;
+    {
+        std::lock_guard<std::mutex> lock(pending_handshake_sends_mutex_);
+        pending.splice(pending.end(), pending_handshake_sends_);
+        pending_handshake_send_count_ = 0;
+    }
+    for (const auto &send : pending) {
+        releaseRequest(send.req);
+    }
 }
 
 nixl_status_t

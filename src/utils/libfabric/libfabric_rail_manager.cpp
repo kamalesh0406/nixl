@@ -1127,7 +1127,9 @@ nixlLibfabricRailManager::postControlMessage(
                << " imm_data=" << imm_data << " dest_addr=" << dest_addr << " on rail " << rail_id;
 
     // Use rail 0 for notifications
-    nixl_status_t status = rails_[rail_id]->postSend(imm_data, dest_addr, req);
+    nixl_status_t status = msg_type == ControlMessageType::HANDSHAKE ?
+        rails_[rail_id]->queueHandshakeSend(imm_data, dest_addr, req) :
+        rails_[rail_id]->postSend(imm_data, dest_addr, req);
 
     if (status != NIXL_SUCCESS) {
         NIXL_ERROR << "Failed to send control message type " << static_cast<int>(msg_type)

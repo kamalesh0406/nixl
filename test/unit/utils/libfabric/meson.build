@@ -68,6 +68,17 @@ if get_option('buildtype') != 'release'
 
     test('rail_active_refcount_test', rail_active_refcount_test_bin)
 
+    handshake_progress_test_bin = executable('handshake_progress_test',
+               'handshake_progress_test.cpp',
+               dependencies: libfabric_utils_dep,
+               include_directories: [nixl_inc_dirs, utils_inc_dirs],
+               link_with: libfabric_utils_lib,
+               cpp_args: libfabric_test_cpp_args,
+               link_args: rail_active_refcount_test_link_args,
+               install: false)
+
+    test('handshake_progress_test', handshake_progress_test_bin, timeout: 10)
+
     src_addr_resolution_test_link_args = [
         '-Wl,--wrap=fi_getinfo',
         '-Wl,--wrap=numa_max_node',
